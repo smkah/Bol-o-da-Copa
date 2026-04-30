@@ -1,0 +1,712 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Navbar from '@/components/Navbar';
+import { motion, AnimatePresence } from 'motion/react';
+import { ShieldAlert, Users, Calendar, Settings, ChevronRight, Search, Trash2, Edit, RefreshCw, Plus, CheckCircle2, AlertTriangle, Trophy } from 'lucide-react';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { adminApi } from '@/lib/api';
+import { toast } from 'sonner';
+
+type TabType = 'overview' | 'users' | 'groups' | 'matches';
+
+export default function AdminPage() {
+  const router = useRouter();
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  
+  // Data state
+  const [data, setData] = useState({
+    users: [] as any[],
+    groups: [] as any[],
+    matches: [] as any[]
+  });
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isActionLoading, setIsActionLoading] = useState<string | null>(null);
+
+  // Modal states
+  const [editingItem, setEditingItem] = useState<{ type: TabType | 'add_user' | 'add_match' | 'add_group', data: any } | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [groupMembers, setGroupMembers] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (editingItem?.type === 'groups' && editingItem.data.id && isSupabaseConfigured) {
+       adminApi.getGroupMembers(editingItem.data.id).then(setGroupMembers);
+    }
+    return () => setGroupMembers([]);
+  }, [editingItem]);
+
+  const fetchAllData = async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const [users, groups, matches] = await Promise.all([
+        adminApi.getUsers().catch(e => { 
+          console.error("Users fetch error:", e?.message || e); 
+          return []; 
+        }),
+        adminApi.getGroups().catch(e => { 
+          console.error("Groups fetch error:", e?.message || e); 
+          return []; 
+        }),
+        adminApi.getMatches().catch(e => { 
+          console.error("Matches fetch error:", e?.message || e); 
+          return []; 
+        })
+      ]);
+      console.log("Fetched admin data:", { usersCount: users.length, groupsCount: groups.length, matchesCount: matches.length });
+      setData({ users: users || [], groups: groups || [], matches: matches || [] });
+    } catch (error) {
+      console.error("Error fetching admin data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const checkUser = async () => {
+      if (!isSupabaseConfigured) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || user.email !== 'samukahweb@gmail.com') {
+        router.push('/dashboard');
+      } else {
+        setUser(user);
+        await fetchAllData();
+      }
+      setLoading(false);
+    };
+    checkUser();
+  }, [router]);
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen bg-[#0F172A] flex items-center justify-center p-6">
+        <div className="glass p-12 rounded-[40px] max-w-xl text-center border-amber-500/30">
+          <AlertTriangle size={64} className="mx-auto text-amber-500 mb-8" />
+          <h1 className="text-4xl font-black uppercase tracking-tighter mb-4 text-white">Configuração Incompleta</h1>
+          <p className="text-slate-400 font-bold uppercase tracking-widest text-xs leading-loose mb-8">
+            As chaves do Supabase não foram encontradas. Para este aplicativo funcionar, você precisa configurar as variáveis <code className="text-emerald-400">NEXT_PUBLIC_SUPABASE_URL</code> e <code className="text-emerald-400">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> no painel de Secrets ou no arquivo .env.
+          </p>
+          <Link href="/" className="inline-block px-10 py-4 bg-emerald-500 text-slate-900 font-black uppercase tracking-widest rounded-2xl">Voltar Home</Link>
+        </div>
+      </div>
+    );
+  }
+
+  const handleSyncMatches = async () => {
+    setIsSyncing(true);
+    try {
+      await adminApi.syncInitialMatches();
+      await fetchAllData();
+      toast.success("Jogos sincronizados com sucesso!");
+    } catch (error: any) {
+      toast.error("Erro ao sincronizar: " + error.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleDeleteUser = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir este usuário?")) return;
+    setIsActionLoading(id);
+    try {
+      await adminApi.deleteUser(id);
+      await fetchAllData();
+      toast.success("Usuário excluído com sucesso!");
+    } catch (error: any) {
+      toast.error("Erro ao excluir usuário: " + (error.message || "Tente novamente"));
+    } finally {
+      setIsActionLoading(null);
+    }
+  };
+
+  if (loading) return <div className="h-screen flex items-center justify-center font-bold text-emerald-400 bg-[#0F172A]">Carregando...</div>;
+
+  const stats = [
+    { label: 'Usuários Totais', value: data.users.length, icon: Users, color: 'text-emerald-400' },
+    { label: 'Bolões Ativos', value: data.groups.length, icon: Trophy, color: 'text-cyan-400' },
+    { label: 'Partidas Totais', value: data.matches.length, icon: Calendar, color: 'text-amber-400' },
+  ];
+
+  const handleSaveUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingItem) return;
+    setModalLoading(true);
+    try {
+      if (editingItem.type === 'users') {
+        await adminApi.updateUser(editingItem.data.id, editingItem.data);
+        toast.success("Perfil atualizado!");
+      }
+      await fetchAllData();
+      setEditingItem(null);
+    } catch (error: any) {
+      toast.error("Erro ao salvar usuário: " + (error.message || "Verifique os dados"));
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  const handleSaveGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingItem) return;
+    setModalLoading(true);
+    try {
+      if (editingItem.type === 'groups') {
+        await adminApi.updateGroup(editingItem.data.id, editingItem.data);
+        toast.success("Bolão atualizado!");
+      } else {
+        await adminApi.createGroup(editingItem.data);
+        toast.success("Novo bolão criado!");
+      }
+      await fetchAllData();
+      setEditingItem(null);
+    } catch (error: any) {
+      toast.error("Erro ao salvar bolão: " + (error.message || "Verifique os dados"));
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  const handleSaveMatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingItem) return;
+    setModalLoading(true);
+    try {
+      if (editingItem.type === 'matches') {
+        await adminApi.updateMatch(editingItem.data.id, editingItem.data);
+        toast.success("Partida atualizada!");
+      } else {
+        await adminApi.createMatch(editingItem.data);
+        toast.success("Nova partida criada!");
+      }
+      await fetchAllData();
+      setEditingItem(null);
+    } catch (error: any) {
+      toast.error("Erro ao salvar partida: " + (error.message || "Verifique os dados"));
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0F172A] text-slate-100">
+      <Navbar />
+
+      <main className="max-w-7xl mx-auto p-6 md:p-12">
+        <header className="mb-14 flex flex-col md:flex-row md:items-end justify-between gap-8">
+          <div>
+            <div className="flex items-center gap-3 text-emerald-400 mb-2">
+              <ShieldAlert size={16} />
+              <p className="text-xs font-bold uppercase tracking-[0.3em]">Ambiente Administrativo</p>
+            </div>
+            <h1 className="text-5xl md:text-6xl font-black uppercase tracking-tighter">
+              GESTÃO DO <span className="gradient-text italic">SISTEMA</span>
+            </h1>
+          </div>
+
+          <div className="flex bg-slate-900/50 p-1.5 rounded-2xl border border-slate-700/50">
+            {(['overview', 'users', 'groups', 'matches'] as TabType[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                  activeTab === tab 
+                    ? 'bg-emerald-500 text-slate-900 shadow-lg shadow-emerald-500/20' 
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {tab === 'overview' ? 'Geral' : tab === 'users' ? 'Usuários' : tab === 'groups' ? 'Bolões' : 'Jogos'}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <AnimatePresence>
+          {editingItem && (
+            <motion.div
+              key="editing-modal"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md"
+            >
+              <motion.div
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="glass w-full max-w-2xl p-10 rounded-[40px] max-h-[90vh] overflow-y-auto shadow-2xl shadow-emerald-500/10"
+              >
+                <div className="flex items-center justify-between mb-8">
+                  <h2 className="text-3xl font-black uppercase tracking-tighter">
+                    {editingItem.type.includes('add') ? 'ADICIONAR' : 'EDITAR'} {editingItem.type.replace('add_', '').toUpperCase()}
+                  </h2>
+                  <button onClick={() => setEditingItem(null)} className="text-slate-500 hover:text-white font-black text-xs uppercase tracking-widest">Fechar</button>
+                </div>
+
+                {editingItem.type === 'users' && (
+                  <form onSubmit={handleSaveUser} className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Nome Completo</label>
+                      <input 
+                        type="text" 
+                        value={editingItem.data.full_name || ''} 
+                        onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, full_name: e.target.value } })}
+                        className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-emerald-500 transition-all font-bold"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Pontos Digitais</label>
+                       <input 
+                        type="number" 
+                        value={editingItem.data.points || 0} 
+                        onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, points: parseInt(e.target.value) } })}
+                        className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-emerald-500 transition-all font-bold"
+                      />
+                    </div>
+                    <button type="submit" disabled={modalLoading} className="w-full py-5 bg-emerald-500 text-slate-900 font-black uppercase tracking-[0.2em] rounded-2xl shadow-lg shadow-emerald-500/20 hover:scale-[1.02] active:scale-95 transition-all">
+                      {modalLoading ? <RefreshCw size={20} className="animate-spin mx-auto" /> : 'Atualizar Perfil'}
+                    </button>
+                  </form>
+                )}
+
+                {(editingItem.type === 'groups' || editingItem.type === 'add_group') && (
+                  <form onSubmit={handleSaveGroup} className="space-y-6 pb-20">
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Nome do Bolão</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={editingItem.data.name || ''} 
+                          onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, name: e.target.value } })}
+                          className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-emerald-500 transition-all font-bold"
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                         <div className="space-y-2">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Time Ganhador</label>
+                            <input type="number" value={editingItem.data.points_winner || 3} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, points_winner: parseInt(e.target.value) } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl font-bold" />
+                         </div>
+                         <div className="space-y-2">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Resultado Exato</label>
+                            <input type="number" value={editingItem.data.points_exact || 5} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, points_exact: parseInt(e.target.value) } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl font-bold" />
+                         </div>
+                         <div className="space-y-2">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Gol/Tempo</label>
+                            <input type="number" value={editingItem.data.points_first_half || 2} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, points_first_half: parseInt(e.target.value) } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl font-bold" />
+                         </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 p-6 bg-slate-950/50 rounded-3xl border border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Regras Personalizadas</label>
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            const newRules = { ...(editingItem.data.custom_rules || {}), "Nova Regra": 0 };
+                            setEditingItem({ ...editingItem, data: { ...editingItem.data, custom_rules: newRules } });
+                          }}
+                          className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-colors"
+                        >+ ADICIONAR REGRA</button>
+                      </div>
+                      <div className="space-y-3">
+                        {Object.entries(editingItem.data.custom_rules || {}).map(([key, value], idx) => (
+                          <div key={idx} className="flex gap-2">
+                            <input 
+                              className="flex-1 bg-slate-900 border border-slate-800 p-3 rounded-xl text-xs font-bold" 
+                              value={key}
+                              onChange={(e) => {
+                                const newRules = { ...editingItem.data.custom_rules };
+                                delete newRules[key];
+                                newRules[e.target.value] = value;
+                                setEditingItem({ ...editingItem, data: { ...editingItem.data, custom_rules: newRules } });
+                              }}
+                            />
+                            <input 
+                              type="number"
+                              className="w-20 bg-slate-900 border border-slate-800 p-3 rounded-xl text-xs font-bold text-center" 
+                              value={value as number}
+                              onChange={(e) => {
+                                const newRules = { ...editingItem.data.custom_rules, [key]: parseInt(e.target.value) };
+                                setEditingItem({ ...editingItem, data: { ...editingItem.data, custom_rules: newRules } });
+                              }}
+                            />
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                const newRules = { ...editingItem.data.custom_rules };
+                                delete newRules[key];
+                                setEditingItem({ ...editingItem, data: { ...editingItem.data, custom_rules: newRules } });
+                              }}
+                              className="p-3 text-red-500 hover:bg-red-500/10 rounded-xl"
+                            >Excluir</button>
+                          </div>
+                        ))}
+                        {Object.keys(editingItem.data.custom_rules || {}).length === 0 && (
+                          <p className="text-[10px] text-slate-600 font-bold uppercase text-center py-2">Sem regras personalizadas</p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {!editingItem.type.includes('add') && (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Membros Atuais ({groupMembers.length})</label>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                           {groupMembers.map(m => (
+                             <div key={m.profile_id} className="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 group">
+                                <span className="text-xs font-bold truncate pr-4">{m.profiles?.email}</span>
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    if(confirm('Remover usuário do bolão?')) {
+                                      try {
+                                        await adminApi.removeUserFromGroup(m.profile_id, editingItem.data.id);
+                                        const updated = await adminApi.getGroupMembers(editingItem.data.id);
+                                        setGroupMembers(updated);
+                                        toast.success("Usuário removido do bolão!");
+                                      } catch (err: any) {
+                                        toast.error("Erro ao remover usuário: " + (err.message || "Tente novamente"));
+                                      }
+                                    }
+                                  }}
+                                  className="text-xs text-red-500 opacity-50 hover:opacity-100 transition-opacity"
+                                >Remover</button>
+                             </div>
+                           ))}
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Adicionar Novo Membro</label>
+                          <select 
+                            className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl font-bold"
+                            onChange={async (e) => {
+                              if (e.target.value && editingItem.data.id) {
+                                try {
+                                  await adminApi.addUserToGroup(e.target.value, editingItem.data.id);
+                                  const updated = await adminApi.getGroupMembers(editingItem.data.id);
+                                  setGroupMembers(updated);
+                                  toast.success("Usuário adicionado com sucesso!");
+                                  } catch (err: any) {
+                                  toast.error("Erro ao adicionar: " + (err.message || "Usuário já pode fazer parte do bolão"));
+                                }
+                              }
+                            }}
+                          >
+                            <option value="">Selecionar Profissional...</option>
+                            {data.users.map(u => <option key={u.id} value={u.id}>{u.email}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    <button type="submit" disabled={modalLoading} className="w-full py-5 bg-cyan-500 text-slate-900 font-black uppercase tracking-[0.2em] rounded-2xl shadow-lg shadow-cyan-500/20 hover:scale-[1.02] active:scale-95 transition-all">
+                      {modalLoading ? <RefreshCw size={20} className="animate-spin mx-auto" /> : editingItem.type === 'add_group' ? 'Criar Bolão' : 'Salvar Alterações'}
+                    </button>
+                  </form>
+                )}
+
+                {(editingItem.type === 'matches' || editingItem.type === 'add_match') && (
+                  <form onSubmit={handleSaveMatch} className="space-y-6">
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Time 1</label>
+                        <input value={editingItem.data.team1 || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, team1: e.target.value } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl" placeholder="Ex: Brasil" required />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Time 2</label>
+                        <input value={editingItem.data.team2 || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, team2: e.target.value } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl" placeholder="Ex: Argentina" required />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Data (YYYY-MM-DD)</label>
+                        <input type="date" value={editingItem.data.date || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, date: e.target.value } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl" required />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Hora</label>
+                        <input type="time" value={editingItem.data.time || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, time: e.target.value } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl" required />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Fase / Round</label>
+                      <input value={editingItem.data.round || 'Matchday 1'} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, round: e.target.value } })} className="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl" required />
+                    </div>
+                    <button type="submit" disabled={modalLoading} className="w-full py-5 bg-amber-500 text-slate-900 font-black uppercase tracking-[0.2em] rounded-2xl hover:scale-[1.02] active:scale-95 transition-all">
+                      {modalLoading ? <RefreshCw size={20} className="animate-spin mx-auto" /> : 'Salvar Partida'}
+                    </button>
+                    {!editingItem.type.includes('add') && (
+                      <button type="button" onClick={async () => {
+                        if(confirm('Excluir partida permanentemente?')) {
+                          await adminApi.deleteMatch(editingItem.data.id);
+                          await fetchAllData();
+                          setEditingItem(null);
+                        }
+                      }} className="w-full py-2 text-red-500 font-bold uppercase text-[10px] tracking-widest">Excluir Partida</button>
+                    )}
+                  </form>
+                )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence mode="wait">
+          {activeTab === 'overview' && (
+            <motion.div
+              key="overview"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16">
+                {stats.map((stat, i) => (
+                  <div
+                    key={stat.label}
+                    className="glass p-8 rounded-[32px] flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">{stat.label}</p>
+                      <h3 className="text-4xl font-black tracking-tighter">{stat.value}</h3>
+                    </div>
+                    <div className={`w-12 h-12 bg-slate-900 ${stat.color} flex items-center justify-center rounded-xl shadow-inner`}>
+                      <stat.icon size={24} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                <section className="glass p-10 rounded-[40px]">
+                  <h2 className="text-2xl font-black uppercase tracking-tighter mb-8">AÇÕES RÁPIDAS</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <button 
+                      onClick={handleSyncMatches}
+                      disabled={isSyncing}
+                      className="flex items-center gap-4 p-6 bg-slate-900 rounded-3xl border border-slate-800 hover:border-emerald-500/50 transition-all group disabled:opacity-50"
+                    >
+                      <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-slate-400 group-hover:text-emerald-400">
+                        {isSyncing ? <RefreshCw size={20} className="animate-spin" /> : <RefreshCw size={20} />}
+                      </div>
+                      <span className="font-bold text-xs uppercase tracking-widest text-left">Sincronizar Jogos</span>
+                    </button>
+                    {/* Other actions could go here */}
+                  </div>
+                </section>
+
+                <section className="glass p-10 rounded-[40px]">
+                  <h2 className="text-2xl font-black uppercase tracking-tighter mb-8">ULTIMOS BOLÕES</h2>
+                  <div className="space-y-4">
+                    {data.groups.slice(0, 4).map(group => (
+                      <div key={group.id} className="flex items-center justify-between p-5 bg-slate-950 rounded-2xl border border-slate-800 hover:border-emerald-500/30 cursor-pointer group" onClick={() => setEditingItem({ type: 'groups', data: group })}>
+                        <div>
+                          <p className="font-bold uppercase text-sm group-hover:text-emerald-400 transition-colors">{group.name}</p>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Código: {group.code}</p>
+                        </div>
+                        <Edit size={18} className="text-slate-700" />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'users' && (
+            <motion.div
+              key="users"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="glass p-10 rounded-[40px]"
+            >
+              <div className="flex items-center justify-between mb-10">
+                <h2 className="text-2xl font-black uppercase tracking-tighter">BASE DE USUÁRIOS</h2>
+                <div className="relative">
+                   <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                   <input type="text" placeholder="BUSCAR USUÁRIO..." className="pl-12 pr-6 py-3 bg-slate-900 border border-slate-800 rounded-xl text-xs font-bold focus:border-emerald-500 outline-none transition-all uppercase tracking-widest" />
+                </div>
+              </div>
+
+              <div className="grid gap-4">
+                {data.users.map(u => (
+                  <div key={u.id} className="flex items-center justify-between p-5 bg-slate-900/50 rounded-2xl border border-slate-700/50 group hover:border-emerald-500/30 transition-all">
+                    <div className="flex items-center gap-6">
+                      <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center font-black text-emerald-400 border border-slate-700 shadow-inner uppercase">
+                        {u.full_name?.charAt(0) || u.email?.charAt(0) || '?'}
+                      </div>
+                      <div>
+                        <p className="font-black text-white">{u.full_name || 'Sem Nome'}</p>
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">{u.email}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-12">
+                      <div className="text-right hidden sm:block">
+                        <p className="text-[10px] font-black uppercase text-slate-600 tracking-tighter">Pontos</p>
+                        <p className="font-black text-emerald-400">{u.points || 0}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setEditingItem({ type: 'users', data: u })} className="p-3 text-slate-500 hover:text-white transition-colors"><Edit size={18} /></button>
+                        <button 
+                          onClick={() => handleDeleteUser(u.id)}
+                          disabled={isActionLoading === u.id}
+                          className="p-3 text-slate-500 hover:text-red-400 transition-colors disabled:opacity-50"
+                        >
+                          {isActionLoading === u.id ? <RefreshCw size={18} className="animate-spin" /> : <Trash2 size={18} />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {data.users.length === 0 && (
+                  <div className="py-20 text-center opacity-50">
+                    <Users size={48} className="mx-auto mb-4 text-slate-700" />
+                    <p className="text-xs font-black uppercase tracking-[0.2em]">Nenhum usuário encontrado na tabela profiles</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'matches' && (
+            <motion.div
+              key="matches"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="glass p-10 rounded-[40px]"
+            >
+              <div className="flex items-center justify-between mb-10">
+                <h2 className="text-2xl font-black uppercase tracking-tighter">JOGOS DA COPA</h2>
+                <div className="flex gap-4">
+                  <button onClick={handleSyncMatches} className="flex items-center gap-2 px-6 py-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-colors">
+                    <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} /> Recarregar
+                  </button>
+                  <button onClick={() => setEditingItem({ type: 'add_match', data: { team1: '', team2: '', date: '', time: '', round: 'Matchday 1' } })} className="flex items-center gap-2 px-6 py-3 bg-emerald-500 text-slate-900 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-400 transition-all">
+                    <Plus size={14} /> Novo Jogo
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {data.matches.map(m => (
+                  <div key={m.id} className="flex flex-col md:flex-row items-center justify-between p-6 bg-slate-900/50 rounded-2xl border border-slate-800 group hover:border-amber-500/30 transition-all gap-6">
+                    <div className="flex items-center gap-6 flex-1">
+                      <div className="text-center min-w-[60px]">
+                        <p className="text-xs font-black text-emerald-400">{new Date(m.date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).toUpperCase()}</p>
+                        <p className="text-[10px] font-bold text-slate-500">{m.time.split(' ')[0]}</p>
+                      </div>
+                      <div className="flex items-center gap-4 flex-1">
+                        <span className="font-black text-sm uppercase flex-1 text-right truncate">{m.team1}</span>
+                        <div className="flex items-center gap-2">
+                           <input type="text" value={m.score1 || ''} className="w-10 h-10 bg-slate-950 border border-slate-800 rounded-lg text-center font-bold text-amber-500 outline-none" readOnly />
+                           <span className="text-slate-700 italic">X</span>
+                           <input type="text" value={m.score2 || ''} className="w-10 h-10 bg-slate-950 border border-slate-800 rounded-lg text-center font-bold text-amber-500 outline-none" readOnly />
+                        </div>
+                        <span className="font-black text-sm uppercase flex-1 truncate">{m.team2}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                       <span className="px-3 py-1 bg-slate-950 border border-slate-800 rounded-lg text-[10px] font-bold text-slate-500 uppercase tracking-widest">{m.round}</span>
+                       <button onClick={() => setEditingItem({ type: 'matches', data: m })} className="p-3 text-slate-500 hover:text-white"><Edit size={18} /></button>
+                    </div>
+                  </div>
+                ))}
+                {data.matches.length === 0 && (
+                  <div className="py-20 text-center opacity-50 border-2 border-dashed border-slate-800 rounded-[32px]">
+                    <AlertTriangle size={48} className="mx-auto mb-4 text-amber-500/50" />
+                    <p className="text-xs font-black uppercase tracking-[0.2em] mb-6">Tabela de jogos vazia</p>
+                    <button onClick={handleSyncMatches} className="px-8 py-4 bg-emerald-500 text-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest">Sincronizar Dados Iniciais</button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'groups' && (
+             <motion.div
+              key="groups"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="glass p-10 rounded-[40px]"
+            >
+              <div className="flex items-center justify-between mb-10">
+                <h2 className="text-2xl font-black uppercase tracking-tighter">BOLÕES ATIVOS</h2>
+                <div className="flex gap-4">
+                   <button onClick={fetchAllData} className="flex items-center gap-2 px-6 py-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-colors">
+                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Recarregar
+                   </button>
+                   <button onClick={() => setEditingItem({ type: 'add_group', data: { name: '', points_winner: 3, points_exact: 5, points_first_half: 2 } })} className="flex items-center gap-2 px-6 py-3 bg-cyan-500 text-slate-900 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-cyan-400 transition-all">
+                      <Plus size={14} /> Novo Bolão
+                   </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {data.groups.map(group => (
+                  <div key={group.id} className="p-8 bg-slate-900/50 rounded-[32px] border border-slate-800 group hover:border-cyan-500/30 transition-all">
+                    <div className="flex justify-between items-start mb-6">
+                      <div>
+                        <h3 className="text-xl font-black uppercase tracking-tight mb-1">{group.name}</h3>
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Código: <span className="text-cyan-400">{group.code}</span></p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setEditingItem({ type: 'groups', data: group })} className="p-2 text-slate-500 hover:text-white"><Edit size={16} /></button>
+                        <button 
+                          onClick={() => {
+                            if(confirm("Excluir este bolão permanentemente?")) {
+                              adminApi.deleteGroup(group.id)
+                                .then(() => {
+                                  toast.success("Bolão excluído com sucesso!");
+                                  fetchAllData();
+                                })
+                                .catch(err => {
+                                  console.error("Erro ao excluir bolão:", err);
+                                  toast.error("Erro ao excluir: " + (err.message || "Erro desconhecido"));
+                                });
+                            }
+                          }}
+                          className="p-2 text-slate-500 hover:text-red-400"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mb-6">
+                       <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                          <p className="text-[8px] font-bold text-slate-500 uppercase">Vencedor</p>
+                          <p className="font-black text-xs text-emerald-400">{group.points_winner || 0}</p>
+                       </div>
+                       <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                          <p className="text-[8px] font-bold text-slate-500 uppercase">Exato</p>
+                          <p className="font-black text-xs text-cyan-400">{group.points_exact || 0}</p>
+                       </div>
+                       <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                          <p className="text-[8px] font-bold text-slate-500 uppercase">Tempo</p>
+                          <p className="font-black text-xs text-amber-400">{group.points_first_half || 0}</p>
+                       </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-6 border-t border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                       <span>Criador: {group.profiles?.email || 'Sistema'}</span>
+                       <span className="flex items-center gap-2 cursor-pointer hover:text-white transition-colors" onClick={() => setEditingItem({ type: 'groups', data: group })}>
+                          <Users size={14} className="text-cyan-400" /> Gerenciar Membros
+                       </span>
+                    </div>
+                  </div>
+                ))}
+                {data.groups.length === 0 && (
+                   <div className="col-span-full py-20 text-center opacity-50">
+                    <Trophy size={48} className="mx-auto mb-4 text-slate-700" />
+                    <p className="text-xs font-black uppercase tracking-[0.2em]">Nenhum bolão criado ainda</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
+    </div>
+  );
+}
